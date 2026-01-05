@@ -35,11 +35,8 @@ import MentionForm, { ITitulaireMention } from "./formulaires/MentionForm";
 import AnalyseMarginaleFormulaire from "./formulaires/mentions/AnalyseMarginaleFormulaire/AnalyseMarginaleFormulaire";
 import TableauMentions from "./formulaires/mentions/ListeMentionsFormulaire/TableauMentions";
 import VerificationDonneesDeces from "./formulaires/VerificationDonnees/VerificationDonneesDeces";
-import VerificationDonneesDecesAmeliore from "./formulaires/VerificationDonnees/VerificationDonneesDecesAmeliore";
 import VerificationDonneesMariage from "./formulaires/VerificationDonnees/VerificationDonneesMariage";
-import VerificationDonneesMariageAmeliore from "./formulaires/VerificationDonnees/VerificationDonneesMariageAmeliore";
 import VerificationDonneesNaissance from "./formulaires/VerificationDonnees/VerificationDonneesNaissance";
-import VerificationDonneesNaissanceAmeliore from "./formulaires/VerificationDonnees/VerificationDonneesNaissanceAmeliore";
 
 interface IDonneesAideSaisie {
   champs: TObjetFormulaire;
@@ -78,30 +75,11 @@ export interface IMiseAJourMentionsForm {
   mentions: IMentionMiseAJour[];
 }
 
-interface IPartieFormulaireProps {
-  onActiveFieldChange?: (fieldName: string | null) => void;
-  onTextHandlerChange?: (handler: ((text: string) => void) | null) => void;
-}
+interface IPartieFormulaireProps {}
 
-const PartieFormulaire: React.FC<IPartieFormulaireProps> = ({
-  onActiveFieldChange,
-  onTextHandlerChange
-}) => {
+const PartieFormulaire: React.FC<IPartieFormulaireProps> = () => {
   const { estMiseAJourAvecMentions, ongletsActifs, idActe, miseAJourEffectuee } = useContext(EditionMiseAJourContext.Valeurs);
   const { changerOnglet, activerOngletActeMisAJour, setComposerActeMisAJour } = useContext(EditionMiseAJourContext.Actions);
-  
-  const [activeFieldName, setActiveFieldName] = useState<string | null>(null);
-  const [textExtractionHandler, setTextExtractionHandler] = useState<((text: string) => void) | null>(null);
-
-  const handleActiveFieldChange = (fieldName: string | null) => {
-    setActiveFieldName(fieldName);
-    onActiveFieldChange?.(fieldName);
-  };
-
-  const handleTextHandlerChange = (handler: ((text: string) => void) | null) => {
-    setTextExtractionHandler(() => handler);
-    onTextHandlerChange?.(handler);
-  };
 
   const { appelApi: mettreAJourAnalyseMarginaleEtMentions, enAttenteDeReponseApi: enAttenteMiseAJourAnalyseMarginaleEtMention } =
     useFetchApi(CONFIG_PUT_ANALYSE_MARGINALE_ET_MENTIONS);
@@ -422,35 +400,29 @@ const PartieFormulaire: React.FC<IPartieFormulaireProps> = ({
                 switch (acte?.nature) {
                   case "NAISSANCE":
                     return (
-                      <VerificationDonneesNaissanceAmeliore
+                      <VerificationDonneesNaissance
                         acte={acte}
                         verificationDonneesEffectuee={verificationDonneesEffectuee}
                         setVerificationDonneesEffectuee={setVerificationDonneesEffectuee}
                         miseAJourEffectuee={miseAJourEffectuee}
-                        onActiveFieldChange={handleActiveFieldChange}
-                        registerTextHandler={handleTextHandlerChange}
                       />
                     );
                   case "MARIAGE":
                     return (
-                      <VerificationDonneesMariageAmeliore
+                      <VerificationDonneesMariage
                         acte={acte}
                         verificationDonneesEffectuee={verificationDonneesEffectuee}
                         setVerificationDonneesEffectuee={setVerificationDonneesEffectuee}
                         miseAJourEffectuee={miseAJourEffectuee}
-                        onActiveFieldChange={handleActiveFieldChange}
-                        registerTextHandler={handleTextHandlerChange}
                       />
                     );
                   case "DECES":
                     return (
-                      <VerificationDonneesDecesAmeliore
+                      <VerificationDonneesDeces
                         acte={acte}
                         verificationDonneesEffectuee={verificationDonneesEffectuee}
                         setVerificationDonneesEffectuee={setVerificationDonneesEffectuee}
                         miseAJourEffectuee={miseAJourEffectuee}
-                        onActiveFieldChange={handleActiveFieldChange}
-                        registerTextHandler={handleTextHandlerChange}
                       />
                     );
                   default:
