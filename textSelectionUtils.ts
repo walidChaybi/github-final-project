@@ -1,9 +1,10 @@
 /**
- * Utilities for text selection and French text to number conversion
+ * Utilities for text selection and French text conversion
  * Used in verification forms to auto-fill fields from selected text
+ * Works in conjunction with DateRECE for date formatting
  */
 
-const FRENCH_MONTHS: Record<string, string> = {
+const MOIS_FRANCAIS: Record<string, string> = {
   janvier: "01",
   fevrier: "02",
   février: "02",
@@ -21,9 +22,10 @@ const FRENCH_MONTHS: Record<string, string> = {
   décembre: "12"
 };
 
-const FRENCH_NUMBERS: Record<string, number> = {
+const NOMBRES_FRANCAIS: Record<string, number> = {
+  zéro: 0,
+  zero: 0,
   un: 1,
-  premier: 1,
   une: 1,
   deux: 2,
   trois: 3,
@@ -40,59 +42,11 @@ const FRENCH_NUMBERS: Record<string, number> = {
   quatorze: 14,
   quinze: 15,
   seize: 16,
-  "dix-sept": 17,
-  "dix-huit": 18,
-  "dix-neuf": 19,
   vingt: 20,
-  "vingt-et-un": 21,
-  "vingt-un": 21,
-  "vingt-deux": 22,
-  "vingt-trois": 23,
-  "vingt-quatre": 24,
-  "vingt-cinq": 25,
-  "vingt-six": 26,
-  "vingt-sept": 27,
-  "vingt-huit": 28,
-  "vingt-neuf": 29,
   trente: 30,
-  "trente-et-un": 31,
-  "trente-un": 31,
   quarante: 40,
   cinquante: 50,
   soixante: 60,
-  "soixante-dix": 70,
-  "soixante-et-onze": 71,
-  "soixante-onze": 71,
-  "soixante-douze": 72,
-  "soixante-treize": 73,
-  "soixante-quatorze": 74,
-  "soixante-quinze": 75,
-  "soixante-seize": 76,
-  "soixante-dix-sept": 77,
-  "soixante-dix-huit": 78,
-  "soixante-dix-neuf": 79,
-  "quatre-vingt": 80,
-  "quatre-vingts": 80,
-  "quatre-vingt-un": 81,
-  "quatre-vingt-et-un": 81,
-  "quatre-vingt-deux": 82,
-  "quatre-vingt-trois": 83,
-  "quatre-vingt-quatre": 84,
-  "quatre-vingt-cinq": 85,
-  "quatre-vingt-six": 86,
-  "quatre-vingt-sept": 87,
-  "quatre-vingt-huit": 88,
-  "quatre-vingt-neuf": 89,
-  "quatre-vingt-dix": 90,
-  "quatre-vingt-onze": 91,
-  "quatre-vingt-douze": 92,
-  "quatre-vingt-treize": 93,
-  "quatre-vingt-quatorze": 94,
-  "quatre-vingt-quinze": 95,
-  "quatre-vingt-seize": 96,
-  "quatre-vingt-dix-sept": 97,
-  "quatre-vingt-dix-huit": 98,
-  "quatre-vingt-dix-neuf": 99,
   cent: 100,
   cents: 100,
   mil: 1000,
@@ -102,118 +56,174 @@ const FRENCH_NUMBERS: Record<string, number> = {
 /**
  * Cleans selected text by removing extra whitespace and normalizing line breaks
  */
-export const cleanSelectedText = (text: string): string => {
-  return text
-    .replace(/(\r\n|\n|\r)/gm, " ")
-    .replace(/\s+/g, " ")
-    .replace(/_{2,}/g, "")
-    .trim();
+export const nettoyerTexteSelectionne = (texte: string | undefined | null): string => {
+  return texte?.replace(/\s+/g, " ").replace(/_{2,}/g, "").trim() || "";
 };
 
 /**
  * Converts French month names to numeric format (01-12)
  */
-export const convertFrenchMonthToNumber = (text: string): string => {
-  const cleanText = text.toLowerCase().trim();
-  
+export const convertirMoisFrancaisEnNombre = (texte: string): string => {
+  const texteNettoye = texte.toLowerCase().trim();
+
   // Check if it's already a number
-  if (!isNaN(Number(cleanText)) && cleanText.length <= 2) {
-    return cleanText.padStart(2, "0");
+  if (!isNaN(Number(texteNettoye)) && texteNettoye.length <= 2) {
+    const num = parseInt(texteNettoye);
+    if (num >= 1 && num <= 12) {
+      return texteNettoye.padStart(2, "0");
+    }
   }
-  
+
   // Check for month names
-  for (const [key, val] of Object.entries(FRENCH_MONTHS)) {
-    if (cleanText.includes(key)) {
+  for (const [cle, val] of Object.entries(MOIS_FRANCAIS)) {
+    if (texteNettoye.includes(cle)) {
       return val;
     }
   }
-  
-  return text;
+
+  return texte;
 };
 
 /**
  * Converts French number words to digits
- * Handles simple numbers (un, deux) and complex ones (vingt-quatre, mil neuf cent)
  */
-export const convertFrenchNumberToDigit = (text: string): string => {
-  const cleanText = text
-    .toLowerCase()
+export const convertirNombreEnChiffre = (texte: string): string => {
+  const texteNettoye = texte.toLowerCase().trim();
+
+  // Already a number? Return as is
+  if (/^\d+$/.test(texteNettoye)) {
+    return texteNettoye;
+  }
+
+  // Normalize: remove hyphens, ordinal suffixes, and split into words
+  const mots = texteNettoye
+    .replace(/[\s-]+/g, " ")
+    .replace(/et/g, "")
+    .replace(/ième|ieme|ier|iere|ère|ere/g, "")
     .trim()
-    .replace(/-/g, " ")
-    .replace(/\s+/g, " ");
-  
-  // If it's already numeric, return as is
-  if (/^\d+$/.test(cleanText)) {
-    return cleanText;
-  }
-  
-  const words = cleanText.split(" ");
+    .split(" ")
+    .filter(mot => mot.length > 0);
+
   let total = 0;
-  let currentAccumulator = 0;
-  
-  words.forEach(word => {
-    const val = FRENCH_NUMBERS[word];
-    if (val !== undefined) {
-      if (val === 100 || val === 1000) {
-        currentAccumulator = (currentAccumulator === 0 ? 1 : currentAccumulator) * val;
-        total += currentAccumulator;
-        currentAccumulator = 0;
-      } else {
-        currentAccumulator += val;
-      }
+  let current = 0;
+
+  for (const mot of mots) {
+    const valeur = NOMBRES_FRANCAIS[mot];
+    if (valeur === undefined) continue;
+
+    // Handle large multipliers (>=1000): add to total and reset
+    if (valeur >= 1000) {
+      current = (current || 1) * valeur;
+      total += current;
+      current = 0;
     }
-  });
-  
-  total += currentAccumulator;
-  
-  if (total > 0) {
-    return total.toString();
+    // Handle "cent" (100): multiply current
+    else if (valeur === 100) {
+      current = (current || 1) * 100;
+    }
+    // Everything else: add to current
+    else {
+      current += valeur;
+    }
   }
-  
-  // Fallback: return original text if conversion failed
-  return text;
+
+  const resultat = total + current;
+  return resultat > 0 ? resultat.toString() : texte;
+};
+
+/**
+ * Converts French sex/gender terms to ESexe enum keys
+ */
+export const convertirSexeFrancaisEnEnum = (texte: string): string => {
+  const normalized = texte
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+
+  const correspondances: Record<string, string> = {
+    feminin: "FEMININ",
+    masculin: "MASCULIN",
+    indetermine: "INDETERMINE",
+    "non renseigne": "INCONNU",
+    inconnu: "INCONNU"
+  };
+
+  // Check if it's in the map
+  if (correspondances[normalized]) {
+    return correspondances[normalized];
+  }
+
+  // Check if already a valid enum key
+  if (["MASCULIN", "FEMININ", "INDETERMINE", "INCONNU"].includes(texte.toUpperCase())) {
+    return texte.toUpperCase();
+  }
+
+  // Default fallback
+  return "INCONNU";
 };
 
 /**
  * Smart conversion function that detects field type and applies appropriate conversion
  */
-export const convertFrenchTextToValue = (text: string, fieldType: "mois" | "jour" | "annee" | "nombre" | "text"): string => {
-  const cleanedText = cleanSelectedText(text);
-  
-  if (fieldType === "mois") {
-    return convertFrenchMonthToNumber(cleanedText);
+export const convertirTexteFrancaisEnValeur = (
+  texte: string | undefined | null,
+  typeChamp: "mois" | "jour" | "annee" | "heure" | "minute" | "nombre" | "sexe" | "text"
+): string => {
+  const texteNettoye = nettoyerTexteSelectionne(texte);
+
+  // If text was null/undefined, return empty string
+  if (!texteNettoye) {
+    return "";
   }
-  
-  if (fieldType === "jour" || fieldType === "annee" || fieldType === "nombre") {
-    return convertFrenchNumberToDigit(cleanedText);
+
+  if (typeChamp === "mois") {
+    return convertirMoisFrancaisEnNombre(texteNettoye);
   }
-  
+
+  if (typeChamp === "jour" || typeChamp === "annee" || typeChamp === "heure" || typeChamp === "minute" || typeChamp === "nombre") {
+    return convertirNombreEnChiffre(texteNettoye);
+  }
+
+  if (typeChamp === "sexe") {
+    return convertirSexeFrancaisEnEnum(texteNettoye);
+  }
+
   // For text fields, just return cleaned text
-  return cleanedText;
+  return texteNettoye;
 };
 
 /**
  * Detects field type from field name
  */
-export const detectFieldType = (fieldName: string): "mois" | "jour" | "annee" | "nombre" | "text" => {
-  const lowerFieldName = fieldName.toLowerCase();
-  
-  if (lowerFieldName.includes("_mois") || lowerFieldName.includes(".mois")) {
-    return "mois";
+export const detecterTypeChamp = (nomChamp: string): "mois" | "jour" | "annee" | "heure" | "minute" | "nombre" | "sexe" | "text" => {
+  const nomChampMinuscule = nomChamp.toLowerCase();
+
+  // Extract last segment (e.g., "jour" from "evenement.date.jour")
+  const dernierSegment = nomChampMinuscule.split(/[._]/).pop() || "";
+
+  // Map of last segment to type
+  const typesParSegment: Record<string, "mois" | "jour" | "annee" | "heure" | "minute"> = {
+    mois: "mois",
+    jour: "jour",
+    annee: "annee",
+    heure: "heure",
+    minute: "minute"
+  };
+
+  // Check last segment first (most specific)
+  if (typesParSegment[dernierSegment]) {
+    return typesParSegment[dernierSegment];
   }
-  
-  if (lowerFieldName.includes("_jour") || lowerFieldName.includes(".jour")) {
-    return "jour";
-  }
-  
-  if (lowerFieldName.includes("_annee") || lowerFieldName.includes(".annee") || lowerFieldName.includes("_annee") || lowerFieldName.includes(".annee")) {
-    return "annee";
-  }
-  
-  if (lowerFieldName.includes("age") || lowerFieldName.includes("nombre")) {
+
+  // Check full field name for special cases
+  if (nomChampMinuscule.includes("age") || nomChampMinuscule.includes("nombre")) {
     return "nombre";
   }
-  
+
+  if (nomChampMinuscule.includes("sexe")) {
+    return "sexe";
+  }
+
   return "text";
 };
-
