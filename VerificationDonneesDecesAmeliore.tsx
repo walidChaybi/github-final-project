@@ -1,25 +1,23 @@
 import ChampDate from "@composants/commun/champs/ChampDate";
-import ChampTexte from "@composants/commun/champs/ChampTexte";
 import ChampsPrenoms from "@composants/commun/champs/ChampsPrenoms";
+import ChampTexte from "@composants/commun/champs/ChampTexte";
 import ConteneurAvecBordure from "@composants/commun/conteneurs/formulaire/ConteneurAvecBordure";
 import { FicheActe } from "@model/etatcivil/acte/FicheActe";
 import { Mention } from "@model/etatcivil/acte/mention/Mention";
 import { DateHeureFormUtils, IDateHeureForm } from "@model/form/commun/DateForm";
 import { PrenomsForm, TPrenomsForm } from "@model/form/commun/PrenomsForm";
 import { Formik } from "formik";
-import React, { useEffect, useRef, useState } from "react";
-import { VscUnlock } from "react-icons/vsc";
-import { convertFrenchTextToValue, detectFieldType } from "../../../../../utils/textSelectionUtils";
-import { CHAMPS_ORDRE_DECES, getNextField } from "./fieldMapping";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { EditionMiseAJourContext } from "../../../../../contexts/EditionMiseAJourContextProvider";
+import { convertirTexteFrancaisEnValeur, detecterTypeChamp } from "../../../../../utils/textSelectionUtils";
+import { getFieldOrder, getNextFieldSmart } from "./fieldMapping";
 import VerifierCaseACocher from "./VerifierCaseACocher";
 
-interface IVerificationDonneesDecesAmelioreProps {
+interface IVerificationDonneesDecesProps {
   acte: FicheActe | null;
   verificationDonneesEffectuee: boolean;
   setVerificationDonneesEffectuee: (value: boolean) => void;
   miseAJourEffectuee: boolean;
-  onActiveFieldChange?: (fieldName: string | null) => void;
-  registerTextHandler?: (handler: (text: string) => void) => void;
 }
 
 interface ILieu {
@@ -29,6 +27,10 @@ interface ILieu {
 interface IParent {
   nom: string;
   prenoms: TPrenomsForm;
+  profession: string;
+  domicile: {
+    adresse: string;
+  };
 }
 
 interface IVerificationDonneesDecesForm {
@@ -41,6 +43,10 @@ interface IVerificationDonneesDecesForm {
     prenoms: TPrenomsForm;
     dateNaissance: IDateHeureForm;
     lieu: ILieu;
+    profession: string;
+    domicile: {
+      adresse: string;
+    };
     pere: IParent;
     mere: IParent;
   };
@@ -55,175 +61,217 @@ interface IVerificationDonneesDecesForm {
   verificationEffectuee: boolean;
 }
 
-const initialiserDate = (jour?: number, mois?: number, annee?: number): IDateHeureForm => {
-  return DateHeureFormUtils.valeursDefauts({
-    jour: jour?.toString(),
-    mois: mois?.toString(),
-    annee: annee?.toString()
-  });
-};
-
-const initialiserPrenoms = (prenoms: string[] | undefined): TPrenomsForm => {
-  return PrenomsForm.depuisStringDto(prenoms || []);
-};
-
 const InfosParent: React.FC<{
-  prefix: string;
+  prefixe: string;
   libelleNom: string;
-  activeField: string | null;
-  onFieldFocus: (fieldName: string) => void;
-}> = ({ prefix, libelleNom, activeField, onFieldFocus }) => (
-  <div>
-    <div className={`transition-all duration-200 rounded-lg p-3 ${activeField === `${prefix}.nom` ? "bg-blue-50 border border-blue-500" : ""}`}>
-      <div className="flex justify-between items-center mb-1">
-        <label className={`text-xs font-bold uppercase tracking-wider ${activeField === `${prefix}.nom` ? "text-blue-700" : "text-gray-500"}`}>
-          {libelleNom}
-        </label>
-        {activeField === `${prefix}.nom` && <VscUnlock className="w-3 h-3 text-blue-400" />}
-      </div>
-      <ChampTexte
-        name={`${prefix}.nom`}
-        libelle=""
-        estVerrouillable
-        onFocus={() => onFieldFocus(`${prefix}.nom`)}
-      />
-    </div>
-    <div className="mt-2">
-      <ChampsPrenoms
-        cheminPrenoms={`${prefix}.prenoms`}
-        prefixePrenom="prenom"
-        estVerrouillable
-      />
-    </div>
+  onFocusChamp: (nomChamp: string) => void;
+}> = ({ prefixe, libelleNom, onFocusChamp }) => (
+  <div className="space-y-4">
+    <ChampTexte
+      name={`${prefixe}.nom`}
+      libelle={libelleNom}
+      estVerrouillable
+      onFocus={() => onFocusChamp(`${prefixe}.nom`)}
+    />
+    <ChampsPrenoms
+      cheminPrenoms={`${prefixe}.prenoms`}
+      prefixePrenom="prenom"
+      estVerrouillable
+      onFocus={e => onFocusChamp(e.target.id)}
+    />
+    <ChampTexte
+      name={`${prefixe}.domicile.adresse`}
+      libelle="Domicile"
+      estVerrouillable
+      onFocus={() => onFocusChamp(`${prefixe}.domicile.adresse`)}
+    />
+    <ChampTexte
+      name={`${prefixe}.profession`}
+      libelle="Profession"
+      estVerrouillable
+      onFocus={() => onFocusChamp(`${prefixe}.profession`)}
+    />
   </div>
 );
 
-const VerificationDonneesDecesAmeliore: React.FC<IVerificationDonneesDecesAmelioreProps> = ({
+const VerificationDonneesDeces: React.FC<IVerificationDonneesDecesProps> = ({
   acte,
   verificationDonneesEffectuee,
   setVerificationDonneesEffectuee,
-  miseAJourEffectuee,
-  onActiveFieldChange,
-  registerTextHandler
+  miseAJourEffectuee
 }) => {
-  if (!acte) return null;
+  const { enregistrerGestionnaireTexte } = useContext(EditionMiseAJourContext.Actions);
+  const [champActif, setChampActif] = useState<string | null>(null);
+  const [derniereAction, setDerniereAction] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const refFormulaire = useRef<any>(null);
 
-  const [activeField, setActiveField] = useState<string | null>(null);
-  const [lastAction, setLastAction] = useState<{ type: "success" | "error"; message: string } | null>(null);
-  const formikRef = useRef<any>(null);
+  const gererFocusChamp = useCallback((nomChamp: string) => {
+    setChampActif(nomChamp);
+  }, []);
+
+  const gererExtractionTexte = useCallback(
+    (texte: string) => {
+      if (!champActif || !refFormulaire.current) {
+        setDerniereAction({ type: "error", message: "Sélectionnez un champ d'abord !" });
+        return;
+      }
+
+      const typeChamp = detecterTypeChamp(champActif);
+      let valeurFinale = convertirTexteFrancaisEnValeur(texte, typeChamp);
+
+      refFormulaire.current.setFieldValue(champActif, valeurFinale);
+
+      const aEteConverti = valeurFinale !== texte;
+      setDerniereAction({
+        type: "success",
+        message: aEteConverti ? `Converti : "${texte.substring(0, 10)}" → ${valeurFinale}` : `Copié : "${valeurFinale.substring(0, 15)}"`
+      });
+
+      setTimeout(() => {
+        const valeursCourantes = refFormulaire.current.values;
+        const champSuivant = getNextFieldSmart(champActif, "DECES", valeursCourantes);
+
+        if (champSuivant) {
+          const element = document.getElementById(champSuivant);
+          if (element) {
+            element.focus();
+            gererFocusChamp(champSuivant);
+          }
+        } else {
+          setDerniereAction({
+            type: "success",
+            message: "✅ Dernier champ atteint !"
+          });
+        }
+      }, 100);
+    },
+    [champActif, gererFocusChamp]
+  );
+
+  useEffect(() => {
+    if (!derniereAction) return;
+
+    const timer = setTimeout(() => setDerniereAction(null), 3000);
+    return () => clearTimeout(timer);
+  }, [derniereAction]);
+
+  useEffect(() => {
+    if (enregistrerGestionnaireTexte) {
+      enregistrerGestionnaireTexte(gererExtractionTexte);
+    }
+  }, [enregistrerGestionnaireTexte, gererExtractionTexte]);
+
+  useEffect(() => {
+    setTimeout(() => {
+      const ordreChamps = getFieldOrder("DECES");
+      const premierChamp = ordreChamps[0];
+      if (premierChamp) {
+        const element = document.getElementById(premierChamp);
+        if (element) {
+          element.focus();
+          gererFocusChamp(premierChamp);
+        }
+      }
+    }, 500);
+  }, [gererFocusChamp]);
+
+  if (!acte) return null;
 
   const defunt = acte.titulaires[0];
   const pere = defunt?.getPere();
   const mere = defunt?.getMere();
 
-  const valeursInitiales: IVerificationDonneesDecesForm = {
-    evenement: {
-      date: initialiserDate(acte.evenement?.jour, acte.evenement?.mois, acte.evenement?.annee),
-      lieu: {
-        lieuReprise: acte.evenement?.lieuReprise || ""
-      }
-    },
-    defunt: {
-      nom: defunt?.nom || "",
-      prenoms: initialiserPrenoms(defunt?.prenoms),
-      dateNaissance: initialiserDate(defunt?.naissance?.jour, defunt?.naissance?.mois, defunt?.naissance?.annee),
-      lieu: {
-        lieuReprise: defunt?.naissance?.lieuReprise || ""
-      },
-      pere: {
-        nom: pere?.nom || "",
-        prenoms: initialiserPrenoms(pere?.prenoms)
-      },
-      mere: {
-        nom: mere?.nom || "",
-        prenoms: initialiserPrenoms(mere?.prenoms)
-      }
-    },
-    dernierConjoint: {
-      nom: defunt?.nomDernierConjoint || "",
-      prenoms: initialiserPrenoms(defunt?.prenomsDernierConjoint ? [defunt.prenomsDernierConjoint] : [])
-    },
-    informationsComplementaires: {
-      mentions: acte.mentions || [],
-      dateCreation: acte.dateCreation?.format("JJ/MM/AAAA") ?? ""
-    },
-    verificationEffectuee: verificationDonneesEffectuee
-  };
-
-  const handleFieldFocus = (fieldName: string) => {
-    setActiveField(fieldName);
-    onActiveFieldChange?.(fieldName);
-  };
-
-  const handleTextExtracted = (text: string) => {
-    if (!activeField || !formikRef.current) {
-      setLastAction({ type: "error", message: "Sélectionnez un champ d'abord !" });
-      return;
-    }
-
-    const fieldType = detectFieldType(activeField);
-    let finalValue = convertFrenchTextToValue(text, fieldType);
-
-    // Handle date fields specially
-    if (activeField.includes("dateNaissance") || activeField.includes("date")) {
-      const parts = activeField.split(".");
-      const dateField = parts[parts.length - 1];
-      
-      if (dateField === "jour") {
-        formikRef.current.setFieldValue(activeField, finalValue);
-      } else if (dateField === "mois") {
-        formikRef.current.setFieldValue(activeField, finalValue);
-      } else if (dateField === "annee") {
-        formikRef.current.setFieldValue(activeField, finalValue);
-      }
-    } else {
-      formikRef.current.setFieldValue(activeField, finalValue);
-    }
-
-    const wasConverted = finalValue !== text;
-    setLastAction({
-      type: "success",
-      message: wasConverted
-        ? `Converti : "${text.substring(0, 10)}..." → ${finalValue}`
-        : `Copié : "${finalValue.substring(0, 15)}..."`
-    });
-
-    // Auto-navigate to next field
-    const nextField = getNextField(activeField, CHAMPS_ORDRE_DECES);
-    if (nextField) {
-      setTimeout(() => {
-        const nextInput = document.getElementById(nextField);
-        if (nextInput) {
-          nextInput.focus();
-          handleFieldFocus(nextField);
+  const valeursInitiales: IVerificationDonneesDecesForm = useMemo(
+    () => ({
+      evenement: {
+        date: DateHeureFormUtils.valeursDefauts({
+          jour: acte.evenement?.jour?.toString(),
+          mois: acte.evenement?.mois?.toString(),
+          annee: acte.evenement?.annee?.toString()
+        }),
+        lieu: {
+          lieuReprise: acte.evenement?.lieuReprise || ""
         }
-      }, 100);
-    }
-  };
-
-  useEffect(() => {
-    if (lastAction) {
-      const timer = setTimeout(() => setLastAction(null), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [lastAction]);
-
-  // Register text extraction handler with parent
-  useEffect(() => {
-    if (registerTextHandler) {
-      registerTextHandler(handleTextExtracted);
-    }
-  }, [activeField]);
+      },
+      defunt: {
+        nom: defunt?.nom || "",
+        prenoms: PrenomsForm.depuisStringDto(defunt?.prenoms || []),
+        dateNaissance: DateHeureFormUtils.valeursDefauts({
+          jour: defunt?.naissance?.jour?.toString(),
+          mois: defunt?.naissance?.mois?.toString(),
+          annee: defunt?.naissance?.annee?.toString()
+        }),
+        lieu: {
+          lieuReprise: defunt?.naissance?.lieuReprise || ""
+        },
+        profession: defunt?.profession || "",
+        domicile: {
+          adresse: [defunt?.domicile?.voie, defunt?.domicile?.ville, defunt?.domicile?.region, defunt?.domicile?.pays]
+            .filter(Boolean)
+            .join(", ")
+        },
+        pere: {
+          nom: pere?.nom || "",
+          prenoms: PrenomsForm.depuisStringDto(pere?.prenoms || []),
+          profession: pere?.profession || "",
+          domicile: {
+            adresse: [pere?.domicile?.voie, pere?.domicile?.ville, pere?.domicile?.region, pere?.domicile?.pays].filter(Boolean).join(", ")
+          }
+        },
+        mere: {
+          nom: mere?.nom || "",
+          prenoms: PrenomsForm.depuisStringDto(mere?.prenoms || []),
+          profession: mere?.profession || "",
+          domicile: {
+            adresse: [mere?.domicile?.voie, mere?.domicile?.ville, mere?.domicile?.region, mere?.domicile?.pays].filter(Boolean).join(", ")
+          }
+        }
+      },
+      dernierConjoint: {
+        nom: defunt?.nomDernierConjoint || "",
+        prenoms: PrenomsForm.depuisStringDto(defunt?.prenomsDernierConjoint ? [defunt.prenomsDernierConjoint] : [])
+      },
+      informationsComplementaires: {
+        mentions: acte.mentions || [],
+        dateCreation: acte.dateCreation?.format("JJ/MM/AAAA") ?? ""
+      },
+      verificationEffectuee: verificationDonneesEffectuee
+    }),
+    [acte, defunt, pere, mere, verificationDonneesEffectuee]
+  );
 
   return (
     <Formik<IVerificationDonneesDecesForm>
-      innerRef={formikRef}
+      innerRef={refFormulaire}
       enableReinitialize
       initialValues={valeursInitiales}
       onSubmit={() => {}}
     >
       {({ values }) => (
         <div className="flex h-[calc(100vh-18rem)] flex-col">
+          {/* Status bar */}
+          <div className="mb-2 rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className={`h-2 w-2 rounded-full ${champActif ? "animate-pulse bg-green-500" : "bg-gray-400"}`}></div>
+                <span className="text-sm font-medium text-gray-700">
+                  {champActif ? (
+                    <>
+                      Champ actif: <span className="text-blue-600">{champActif.split(".").pop()}</span>
+                    </>
+                  ) : (
+                    "Cliquez sur un champ pour commencer"
+                  )}
+                </span>
+              </div>
+              {derniereAction && (
+                <div className={`text-xs font-medium ${derniereAction.type === "success" ? "text-green-600" : "text-red-600"}`}>
+                  {derniereAction.message}
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="space-y-8 overflow-y-auto border border-gray-200 py-6">
             {/* Section Événement */}
             <ConteneurAvecBordure titreEnTete="Événement - Décès">
@@ -232,119 +280,99 @@ const VerificationDonneesDecesAmeliore: React.FC<IVerificationDonneesDecesAmelio
                   name="evenement.date"
                   libelle="Date du décès"
                   estVerrouillable
+                  onFocus={e => gererFocusChamp(e.target.id)}
                 />
-                <div className="grid grid-cols-3 gap-4">
-                  <div className={`transition-all duration-200 rounded-lg p-3 ${activeField === "evenement.lieu.lieuReprise" ? "bg-blue-50 border border-blue-500" : ""}`}>
-                    <div className="flex justify-between items-center mb-1">
-                      <label className={`text-xs font-bold uppercase tracking-wider ${activeField === "evenement.lieu.lieuReprise" ? "text-blue-700" : "text-gray-500"}`}>
-                        Lieu événement
-                      </label>
-                      {activeField === "evenement.lieu.lieuReprise" && <VscUnlock className="w-3 h-3 text-blue-400" />}
-                    </div>
-                    <ChampTexte
-                      name="evenement.lieu.lieuReprise"
-                      libelle=""
-                      estVerrouillable
-                      onFocus={() => handleFieldFocus("evenement.lieu.lieuReprise")}
-                    />
-                  </div>
-                </div>
+                <ChampTexte
+                  name="evenement.lieu.lieuReprise"
+                  libelle="Lieu événement"
+                  estVerrouillable
+                  onFocus={() => gererFocusChamp("evenement.lieu.lieuReprise")}
+                />
               </div>
             </ConteneurAvecBordure>
-            
+
             {/* Section Défunt */}
             <ConteneurAvecBordure titreEnTete="Informations de la personne décédée">
               <div className="mt-4 space-y-4">
-                <div className={`transition-all duration-200 rounded-lg p-3 ${activeField === "defunt.nom" ? "bg-blue-50 border border-blue-500" : ""}`}>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className={`text-xs font-bold uppercase tracking-wider ${activeField === "defunt.nom" ? "text-blue-700" : "text-gray-500"}`}>
-                      Nom
-                    </label>
-                    {activeField === "defunt.nom" && <VscUnlock className="w-3 h-3 text-blue-400" />}
-                  </div>
-                  <ChampTexte
-                    name="defunt.nom"
-                    libelle=""
-                    estVerrouillable
-                    onFocus={() => handleFieldFocus("defunt.nom")}
-                  />
-                </div>
+                <ChampTexte
+                  name="defunt.nom"
+                  libelle="Nom"
+                  estVerrouillable
+                  onFocus={() => gererFocusChamp("defunt.nom")}
+                />
                 <ChampsPrenoms
                   cheminPrenoms="defunt.prenoms"
                   prefixePrenom="prenom"
                   estVerrouillable
+                  onFocus={e => gererFocusChamp(e.target.id)}
                 />
                 <ChampDate
                   name="defunt.dateNaissance"
                   libelle="Date de naissance"
                   estVerrouillable
+                  onFocus={e => gererFocusChamp(e.target.id)}
                 />
-                <div className="grid grid-cols-3 gap-4">
-                  <div className={`transition-all duration-200 rounded-lg p-3 ${activeField === "defunt.lieu.lieuReprise" ? "bg-blue-50 border border-blue-500" : ""}`}>
-                    <div className="flex justify-between items-center mb-1">
-                      <label className={`text-xs font-bold uppercase tracking-wider ${activeField === "defunt.lieu.lieuReprise" ? "text-blue-700" : "text-gray-500"}`}>
-                        Lieu de naissance
-                      </label>
-                      {activeField === "defunt.lieu.lieuReprise" && <VscUnlock className="w-3 h-3 text-blue-400" />}
-                    </div>
-                    <ChampTexte
-                      name="defunt.lieu.lieuReprise"
-                      libelle=""
-                      estVerrouillable
-                      onFocus={() => handleFieldFocus("defunt.lieu.lieuReprise")}
-                    />
-                  </div>
+                <ChampTexte
+                  name="defunt.lieu.lieuReprise"
+                  libelle="Lieu de naissance"
+                  estVerrouillable
+                  onFocus={() => gererFocusChamp("defunt.lieu.lieuReprise")}
+                />
+                <div className="grid grid-cols-2 gap-4">
+                  <ChampTexte
+                    name="defunt.profession"
+                    libelle="Profession"
+                    estVerrouillable
+                    onFocus={() => gererFocusChamp("defunt.profession")}
+                  />
+                  <ChampTexte
+                    name="defunt.domicile.adresse"
+                    libelle="Domicile"
+                    estVerrouillable
+                    onFocus={() => gererFocusChamp("defunt.domicile.adresse")}
+                  />
                 </div>
               </div>
             </ConteneurAvecBordure>
-            
+
             {/* Section Parents du défunt */}
             <ConteneurAvecBordure titreEnTete="Filiation de la personne décédée">
               <div className="mt-4 space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <InfosParent
-                    prefix="defunt.pere"
+                    prefixe="defunt.pere"
                     libelleNom="Nom du père"
-                    activeField={activeField}
-                    onFieldFocus={handleFieldFocus}
+                    onFocusChamp={gererFocusChamp}
                   />
                   <InfosParent
-                    prefix="defunt.mere"
+                    prefixe="defunt.mere"
                     libelleNom="Nom de la mère"
-                    activeField={activeField}
-                    onFieldFocus={handleFieldFocus}
+                    onFocusChamp={gererFocusChamp}
                   />
                 </div>
               </div>
             </ConteneurAvecBordure>
-            
+
             {/* Section Dernier conjoint */}
             {(values.dernierConjoint.nom || values.dernierConjoint.prenoms.prenom1) && (
               <ConteneurAvecBordure titreEnTete="Dernier partenaire ou dernier conjoint">
                 <div className="mt-4 space-y-4">
-                  <div className={`transition-all duration-200 rounded-lg p-3 ${activeField === "dernierConjoint.nom" ? "bg-blue-50 border border-blue-500" : ""}`}>
-                    <div className="flex justify-between items-center mb-1">
-                      <label className={`text-xs font-bold uppercase tracking-wider ${activeField === "dernierConjoint.nom" ? "text-blue-700" : "text-gray-500"}`}>
-                        Nom
-                      </label>
-                      {activeField === "dernierConjoint.nom" && <VscUnlock className="w-3 h-3 text-blue-400" />}
-                    </div>
-                    <ChampTexte
-                      name="dernierConjoint.nom"
-                      libelle=""
-                      estVerrouillable
-                      onFocus={() => handleFieldFocus("dernierConjoint.nom")}
-                    />
-                  </div>
+                  <ChampTexte
+                    name="dernierConjoint.nom"
+                    libelle="Nom"
+                    estVerrouillable
+                    onFocus={() => gererFocusChamp("dernierConjoint.nom")}
+                  />
                   <ChampsPrenoms
                     cheminPrenoms="dernierConjoint.prenoms"
                     prefixePrenom="prenom"
                     estVerrouillable
+                    onFocus={e => gererFocusChamp(e.target.id)}
                   />
                 </div>
               </ConteneurAvecBordure>
             )}
-            
+
             {/* Section Informations complémentaires */}
             <ConteneurAvecBordure titreEnTete="Informations complémentaires">
               <div className="mt-4 space-y-4">
@@ -356,6 +384,7 @@ const VerificationDonneesDecesAmeliore: React.FC<IVerificationDonneesDecesAmelio
                         name={`informationsComplementaires.mentionTexte${index}`}
                         libelle={`${index + 1}. ${mention.getTexteCopie()}`}
                         estVerrouillable
+                        onFocus={() => gererFocusChamp(`informationsComplementaires.mentionTexte${index}`)}
                       />
                     ))}
                   </div>
@@ -365,10 +394,11 @@ const VerificationDonneesDecesAmeliore: React.FC<IVerificationDonneesDecesAmelio
                   name="informationsComplementaires.dateCreation"
                   libelle="Date de création de l'acte"
                   estVerrouillable
+                  onFocus={() => gererFocusChamp("informationsComplementaires.dateCreation")}
                 />
               </div>
             </ConteneurAvecBordure>
-            
+
             <VerifierCaseACocher
               miseAJourEffectuee={miseAJourEffectuee}
               verificationDonneesEffectuee={verificationDonneesEffectuee}
@@ -381,5 +411,4 @@ const VerificationDonneesDecesAmeliore: React.FC<IVerificationDonneesDecesAmelio
   );
 };
 
-export default VerificationDonneesDecesAmeliore;
-
+export default VerificationDonneesDeces;
