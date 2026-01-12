@@ -1,202 +1,134 @@
-import ChampDate from "@composants/commun/champs/ChampDate";
-import ChampsPrenoms from "@composants/commun/champs/ChampsPrenoms";
-import ChampTexte from "@composants/commun/champs/ChampTexte";
-import ConteneurAvecBordure from "@composants/commun/conteneurs/formulaire/ConteneurAvecBordure";
-import { FicheActe } from "@model/etatcivil/acte/FicheActe";
-import { IVerificationDonneesNaissanceForm, MiseAJourModificationForm } from "@model/form/miseAJour/MiseAJourModificationForm";
-import { Formik } from "formik";
-import React, { useEffect, useMemo } from "react";
-import { useVerificationFormulaire } from "../../../../../hooks/requetesMiseAJour/VerificationFormulaireHook";
-import BarreStatutVerification from "./BarreStatutVerification";
-import VerifierCaseACocher from "./VerifierCaseACocher";
+import { CONFIG_PATCH_RECTIFICATIONS_INFOS_ACTE } from "@api/configurations/etatCivil/acte/PatchRectificationsInfosActeConfigApi";
+import { Droit } from "@model/agent/enum/Droit";
+import { FicheActe, IFicheActeDto } from "@model/etatcivil/acte/FicheActe";
+import {
+  IVerificationDonneesDecesForm,
+  IVerificationDonneesMariageForm,
+  IVerificationDonneesNaissanceForm,
+  MiseAJourModificationForm
+} from "@model/form/miseAJour/MiseAJourModificationForm";
+import { useContext, useState } from "react";
+import { ECleOngletsMiseAJour, EditionMiseAJourContext } from "../../../../contexts/EditionMiseAJourContextProvider";
+import { RECEContextData } from "../../../../contexts/RECEContextProvider";
+import useFetchApi from "../../../../hooks/api/FetchApiHook";
+import AfficherMessage from "../../../../utils/AfficherMessage";
+import Bouton from "../../../commun/bouton/Bouton";
+import ConteneurModale from "../../../commun/conteneurs/modale/ConteneurModale";
+import SignatureDocument from "../../../commun/signature/SignatureDocument";
+import { estActeEligibleDoubleNumerique } from "../droitsMiseAJourUtils";
 
-interface IVerificationDonneesNaissanceProps {
+// Type union pour les valeurs de vérification
+export type TValeursVerification =
+  | IVerificationDonneesNaissanceForm
+  | IVerificationDonneesMariageForm
+  | IVerificationDonneesDecesForm
+  | null;
+
+interface IBoutonTerminerEtSignerProps {
+  saisieMentionEnCours: boolean;
   acte: FicheActe;
-  miseAJourEffectuee: boolean;
   verificationDonneesEffectuee: boolean;
-  setVerificationDonneesEffectuee: (value: boolean) => void;
-  onValeursChange: (valeurs: IVerificationDonneesNaissanceForm) => void;
+  verificationObligatoire: boolean;
+  valeursVerification: TValeursVerification;
 }
 
-const VerificationDonneesNaissance: React.FC<IVerificationDonneesNaissanceProps> = ({
+const BoutonTerminerEtSigner: React.FC<IBoutonTerminerEtSignerProps> = ({
+  saisieMentionEnCours,
   acte,
-  miseAJourEffectuee,
   verificationDonneesEffectuee,
-  setVerificationDonneesEffectuee,
-  onValeursChange
+  verificationObligatoire,
+  valeursVerification
 }) => {
-  const { champActif, derniereAction, gererFocusChamp } = useVerificationFormulaire();
+  const { utilisateurConnecte } = useContext(RECEContextData);
+  const { idActe, idRequete, miseAJourEffectuee } = useContext(EditionMiseAJourContext.Valeurs);
+  const { setEstActeSigne, desactiverBlocker, changerOnglet } = useContext(EditionMiseAJourContext.Actions);
+  const [modaleOuverte, setModaleOuverte] = useState(false);
+  const [enCoursEnvoi, setEnCoursEnvoi] = useState(false);
 
-  const valeursInitiales = useMemo(
-    () => MiseAJourModificationForm.valeursInitiales(acte, verificationDonneesEffectuee).naissance,
-    [acte, verificationDonneesEffectuee]
+  const { appelApi: envoyerRectifications, enAttenteDeReponseApi: enAttenteEnvoiRectifications } = useFetchApi(
+    CONFIG_PATCH_RECTIFICATIONS_INFOS_ACTE
   );
 
+  const typeSignature = estActeEligibleDoubleNumerique(acte) ? "DOUBLE_NUMERIQUE" : "MISE_A_JOUR";
+  const estDoubleNumerique = typeSignature === "DOUBLE_NUMERIQUE";
+  const aDroitSigner = utilisateurConnecte.estHabilitePour({ tousLesDroits: [Droit.SIGNER_MENTION, Droit.METTRE_A_JOUR_ACTE] });
+  const verificationManquante = verificationObligatoire && !verificationDonneesEffectuee;
+
+  const construirePayload = (): Partial<IFicheActeDto> | null => {
+    if (!valeursVerification) return null;
+
+    switch (acte.nature) {
+      case "NAISSANCE":
+        return MiseAJourModificationForm.versDtoPatchNaissance(valeursVerification as IVerificationDonneesNaissanceForm, acte);
+      case "MARIAGE":
+      //return MiseAJourModificationForm.versDtoPatchMariage(valeursVerification as IVerificationDonneesMariageForm, acte);
+      case "DECES":
+      //return MiseAJourModificationForm.versDtoPatchDeces(valeursVerification as IVerificationDonneesDecesForm, acte);
+      default:
+        return null;
+    }
+  };
+
+  const gererClicTerminerEtSigner = () => {
+    if (estDoubleNumerique) {
+      const payload = construirePayload();
+      if (!payload) {
+        AfficherMessage.erreur("Données du formulaire manquantes", { fermetureAuto: true });
+        return;
+      }
+
+      setEnCoursEnvoi(true);
+      envoyerRectifications({
+        parametres: { body: payload },
+        apresSucces: () => {
+          setEnCoursEnvoi(false);
+          setModaleOuverte(true);
+        },
+        apresErreur: erreurs => {
+          setEnCoursEnvoi(false);
+          AfficherMessage.erreur("Erreur lors de l'envoi des rectifications", { erreurs, fermetureAuto: true });
+        }
+      });
+    } else {
+      setModaleOuverte(true);
+    }
+  };
+
+  if (!aDroitSigner) return null;
+
   return (
-    <Formik<IVerificationDonneesNaissanceForm>
-      enableReinitialize
-      initialValues={valeursInitiales}
-      onSubmit={() => {}}
-    >
-      {({ values }) => {
-        // Synchroniser les valeurs avec le parent
-        useEffect(() => {
-          onValeursChange(values);
-        }, [values]);
-
-        return (
-          <div
-            className="flex h-[calc(100vh-18rem)] flex-col"
-            onFocus={e => gererFocusChamp(e.target.id)}
-          >
-            <BarreStatutVerification
-              champActif={champActif}
-              derniereAction={derniereAction}
+    <>
+      <Bouton
+        type="button"
+        title={verificationManquante ? "Vous devez vérifier les données avant de signer" : "Terminer et signer"}
+        disabled={saisieMentionEnCours || !miseAJourEffectuee || verificationManquante || enCoursEnvoi || enAttenteEnvoiRectifications}
+        onClick={gererClicTerminerEtSigner}
+      >
+        {"Terminer et signer"}
+      </Bouton>
+      {modaleOuverte && (
+        <ConteneurModale>
+          <div className="border-3 w-[34rem] max-w-full rounded-xl border-solid border-bleu-sombre bg-blanc p-5">
+            <h2 className="m-0 mb-4 text-center font-medium text-bleu-sombre">Signature des mentions</h2>
+            <SignatureDocument
+              typeSignature={typeSignature}
+              idActe={idActe}
+              idRequete={idRequete}
+              apresSignature={succes => {
+                setModaleOuverte(false);
+                if (succes) {
+                  changerOnglet(ECleOngletsMiseAJour.ACTE, null);
+                  setEstActeSigne(true);
+                  AfficherMessage.succes("L'acte a été mis à jour avec succès.", { fermetureAuto: true });
+                  desactiverBlocker();
+                }
+              }}
             />
-
-            <div className="space-y-8 overflow-y-auto border border-gray-200 py-6">
-              <ConteneurAvecBordure titreEnTete="Titulaire">
-                <div className="mt-4 space-y-4">
-                  <ChampTexte
-                    name="titulaire.nom"
-                    libelle="Nom du titulaire"
-                  />
-                  <ChampsPrenoms
-                    cheminPrenoms="titulaire.prenoms"
-                    prefixePrenom="prenom"
-                  />
-                  <ChampTexte
-                    name="titulaire.sexe"
-                    libelle="Sexe"
-                  />
-                  <div className="grid grid-cols-2 gap-4">
-                    <ChampDate
-                      libelle="Date et heure de naissance"
-                      name="titulaire.dateNaissance"
-                      avecHeure
-                    />
-                    <ChampTexte
-                      name="titulaire.lieuNaissance.lieuReprise"
-                      libelle="Lieu naissance"
-                    />
-                  </div>
-                </div>
-              </ConteneurAvecBordure>
-
-              <ConteneurAvecBordure titreEnTete="Informations du parent 1">
-                <div className="mt-4 space-y-4">
-                  <ChampTexte
-                    name="parent1.nom"
-                    libelle="Nom"
-                  />
-                  <ChampsPrenoms
-                    cheminPrenoms="parent1.prenoms"
-                    prefixePrenom="prenom"
-                  />
-                  <div className="grid grid-cols-2 gap-4">
-                    <ChampDate
-                      name="parent1.dateNaissance"
-                      libelle="Date de naissance"
-                    />
-                    <ChampTexte
-                      name="parent1.age"
-                      libelle="Âge"
-                      placeholder="Ex: 25 ans"
-                      numerique
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <ChampTexte
-                      name="parent1.lieuNaissance.lieuReprise"
-                      libelle="Lieu naissance"
-                    />
-                    <ChampTexte
-                      name="parent1.profession"
-                      libelle="Profession"
-                    />
-                  </div>
-                </div>
-              </ConteneurAvecBordure>
-
-              <ConteneurAvecBordure titreEnTete="Informations du parent 2">
-                <div className="mt-4 space-y-4">
-                  <ChampTexte
-                    name="parent2.nom"
-                    libelle="Nom"
-                  />
-                  <ChampsPrenoms
-                    cheminPrenoms="parent2.prenoms"
-                    prefixePrenom="prenom"
-                  />
-                  <div className="grid grid-cols-2 gap-4">
-                    <ChampDate
-                      name="parent2.dateNaissance"
-                      libelle="Date de naissance"
-                    />
-                    <ChampTexte
-                      name="parent2.age"
-                      libelle="Âge"
-                      placeholder="Ex: 30 ans"
-                      numerique
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <ChampTexte
-                      name="parent2.lieuNaissance.lieuReprise"
-                      libelle="Lieu naissance"
-                    />
-                    <ChampTexte
-                      name="parent2.profession"
-                      libelle="Profession"
-                    />
-                  </div>
-                </div>
-              </ConteneurAvecBordure>
-
-              <ConteneurAvecBordure titreEnTete="Déclarant">
-                <div className="mt-4 space-y-4">
-                  <ChampTexte
-                    name="declarant.identiteDeclarant"
-                    libelle="Déclarant"
-                  />
-                </div>
-              </ConteneurAvecBordure>
-
-              <ConteneurAvecBordure titreEnTete="Adresse du titulaire">
-                <div className="mt-4 space-y-4">
-                  <ChampTexte
-                    name="adresseTitulaire.adresse"
-                    libelle="Adresse"
-                  />
-                </div>
-              </ConteneurAvecBordure>
-
-              <ConteneurAvecBordure titreEnTete="Informations complémentaires">
-                <div className="mt-4 space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <ChampTexte
-                      name="informationsComplementaires.francaisPar"
-                      libelle={values.titulaire.sexe === "FEMININ" ? "Française Par" : "Français Par"}
-                    />
-                    <ChampTexte
-                      name="informationsComplementaires.dateCreation"
-                      libelle="Date de création de l'acte"
-                    />
-                  </div>
-                </div>
-              </ConteneurAvecBordure>
-
-              <VerifierCaseACocher
-                miseAJourEffectuee={miseAJourEffectuee}
-                verificationDonneesEffectuee={verificationDonneesEffectuee}
-                setVerificationDonneesEffectuee={setVerificationDonneesEffectuee}
-              />
-            </div>
           </div>
-        );
-      }}
-    </Formik>
+        </ConteneurModale>
+      )}
+    </>
   );
 };
 
-export default VerificationDonneesNaissance;
+export default BoutonTerminerEtSigner;
