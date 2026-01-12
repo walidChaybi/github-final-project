@@ -1,129 +1,441 @@
-import { CONFIG_PATCH_RECTIFICATIONS_INFOS_ACTE } from "@api/configurations/etatCivil/acte/PatchRectificationsInfosActeConfigApi";
+import { CONFIG_GET_RESUME_ACTE } from "@api/configurations/etatCivil/acte/GetResumeActeConfigApi";
+import CONFIG_GET_FORMULE_INTEGRATION_RECE, {
+  IFormuleIntegrationDto
+} from "@api/configurations/etatCivil/nomenclature/GetFormuleIntegrationRECEApi";
+import { CONFIG_PUT_ANALYSE_MARGINALE_ET_MENTIONS } from "@api/configurations/etatCivil/PutAnalyseMarginaleEtMentionsConfigApi";
+import { CONFIG_PUT_MISE_A_JOUR_ANALYSE_MARGINALE } from "@api/configurations/etatCivil/PutMiseAJourAnalyseMarginaleConfigApi";
 import { Droit } from "@model/agent/enum/Droit";
-import { FicheActe, IFicheActeDto } from "@model/etatcivil/acte/FicheActe";
-import {
-  IVerificationDonneesDecesForm,
-  IVerificationDonneesMariageForm,
-  IVerificationDonneesNaissanceForm,
-  MiseAJourModificationForm
-} from "@model/form/miseAJour/MiseAJourModificationForm";
-import { useContext, useState } from "react";
-import { ECleOngletsMiseAJour, EditionMiseAJourContext } from "../../../../contexts/EditionMiseAJourContextProvider";
-import { RECEContextData } from "../../../../contexts/RECEContextProvider";
-import useFetchApi from "../../../../hooks/api/FetchApiHook";
-import AfficherMessage from "../../../../utils/AfficherMessage";
-import Bouton from "../../../commun/bouton/Bouton";
-import ConteneurModale from "../../../commun/conteneurs/modale/ConteneurModale";
-import SignatureDocument from "../../../commun/signature/SignatureDocument";
-import { estActeEligibleDoubleNumerique } from "../droitsMiseAJourUtils";
+import { TErreurApi } from "@model/api/Api";
+import { FicheActe } from "@model/etatcivil/acte/FicheActe";
+import { Filiation } from "@model/etatcivil/acte/Filiation";
+import { ESexe } from "@model/etatcivil/enum/Sexe";
+import AnalyseMarginaleForm from "@model/form/AnalyseMarginale/AnalyseMarginaleForm";
+import { TObjetFormulaire } from "@model/form/commun/ObjetFormulaire";
+import { TPrenomsForm } from "@model/form/commun/PrenomsForm";
+import MiseAJourForm from "@model/form/miseAJour/MiseAJourForm";
+import { Formik } from "formik";
+import { useContext, useEffect, useMemo, useState } from "react";
+import { Form } from "react-router";
+import { ECleOngletsMiseAJour, EditionMiseAJourContext } from "../../../contexts/EditionMiseAJourContextProvider";
+import { RECEContextData } from "../../../contexts/RECEContextProvider";
+import useFetchApi from "../../../hooks/api/FetchApiHook";
+import AfficherMessage from "../../../utils/AfficherMessage";
+import DateRECE from "../../../utils/DateRECE";
+import Bouton from "../../commun/bouton/Bouton";
+import { ConteneurBoutonBasDePage } from "../../commun/bouton/conteneurBoutonBasDePage/ConteneurBoutonBasDePage";
+import PageChargeur from "../../commun/chargeurs/PageChargeur";
+import ConteneurAvecBordure from "../../commun/conteneurs/formulaire/ConteneurAvecBordure";
+import ConteneurModale from "../../commun/conteneurs/modale/ConteneurModale";
+import OngletsBouton from "../../commun/onglets/OngletsBouton";
+import OngletsContenu from "../../commun/onglets/OngletsContenu";
+import { estActeEligibleDoubleNumerique } from "./droitsMiseAJourUtils";
+import BoutonTerminerEtSigner, { TValeursVerification } from "./formulaires/BoutonTerminerEtSigner";
+import BoutonValiderEtTerminer from "./formulaires/BoutonValiderEtTerminer";
+import MentionForm, { ITitulaireMention } from "./formulaires/MentionForm";
+import AnalyseMarginaleFormulaire from "./formulaires/mentions/AnalyseMarginaleFormulaire/AnalyseMarginaleFormulaire";
+import TableauMentions from "./formulaires/mentions/ListeMentionsFormulaire/TableauMentions";
+import VerificationDonneesDeces from "./formulaires/VerificationDonnees/VerificationDonneesDeces";
+import VerificationDonneesMariage from "./formulaires/VerificationDonnees/VerificationDonneesMariage";
+import VerificationDonneesNaissance from "./formulaires/VerificationDonnees/VerificationDonneesNaissance";
 
-// Type union pour les valeurs de vérification
-export type TValeursVerification =
-  | IVerificationDonneesNaissanceForm
-  | IVerificationDonneesMariageForm
-  | IVerificationDonneesDecesForm
-  | null;
-
-interface IBoutonTerminerEtSignerProps {
-  saisieMentionEnCours: boolean;
-  acte: FicheActe;
-  verificationDonneesEffectuee: boolean;
-  verificationObligatoire: boolean;
-  valeursVerification: TValeursVerification;
+interface IDonneesAideSaisie {
+  champs: TObjetFormulaire;
+  textesEdites: { [cle: string]: { edite: string; original: string } };
 }
 
-const BoutonTerminerEtSigner: React.FC<IBoutonTerminerEtSignerProps> = ({
-  saisieMentionEnCours,
-  acte,
-  verificationDonneesEffectuee,
-  verificationObligatoire,
-  valeursVerification
-}) => {
-  const { utilisateurConnecte } = useContext(RECEContextData);
-  const { idActe, idRequete, miseAJourEffectuee } = useContext(EditionMiseAJourContext.Valeurs);
-  const { setEstActeSigne, desactiverBlocker, changerOnglet } = useContext(EditionMiseAJourContext.Actions);
-  const [modaleOuverte, setModaleOuverte] = useState(false);
-  const [enCoursEnvoi, setEnCoursEnvoi] = useState(false);
+export interface IMentionMiseAJour {
+  texte: string;
+  idTypeMention: string;
+  affecteAnalyseMarginale: boolean;
+  donneesAideSaisie?: IDonneesAideSaisie;
+}
 
-  const { appelApi: envoyerRectifications, enAttenteDeReponseApi: enAttenteEnvoiRectifications } = useFetchApi(
-    CONFIG_PATCH_RECTIFICATIONS_INFOS_ACTE
+export interface IMentionEnCours {
+  index: number | null;
+  mention: IMentionMiseAJour;
+}
+
+export interface IAnalyseMarginaleMiseAJour extends TObjetFormulaire {
+  motif: string;
+  titulaires: {
+    nom: string;
+    nomSecable: boolean;
+    nomPartie1: string;
+    nomPartie2: string;
+    prenoms: TPrenomsForm;
+  }[];
+}
+
+export interface IMiseAJourForm {
+  mentions: IMentionMiseAJour[];
+  analyseMarginale: IAnalyseMarginaleMiseAJour;
+}
+
+export interface IMiseAJourMentionsForm {
+  mentions: IMentionMiseAJour[];
+}
+
+const PartieFormulaire: React.FC = () => {
+  const { estMiseAJourAvecMentions, ongletsActifs, idActe, miseAJourEffectuee } = useContext(EditionMiseAJourContext.Valeurs);
+  const { changerOnglet, activerOngletActeMisAJour, setComposerActeMisAJour } = useContext(EditionMiseAJourContext.Actions);
+
+  const { appelApi: mettreAJourAnalyseMarginaleEtMentions, enAttenteDeReponseApi: enAttenteMiseAJourAnalyseMarginaleEtMention } =
+    useFetchApi(CONFIG_PUT_ANALYSE_MARGINALE_ET_MENTIONS);
+  const { appelApi: mettreAJourAnalyseMarginale, enAttenteDeReponseApi: enAttenteMiseAJourAnalyseMarginale } = useFetchApi(
+    CONFIG_PUT_MISE_A_JOUR_ANALYSE_MARGINALE
   );
+  const [afficherAnalyseMarginale, setAfficherAnalyseMarginale] = useState(!estMiseAJourAvecMentions);
 
-  const typeSignature = estActeEligibleDoubleNumerique(acte) ? "DOUBLE_NUMERIQUE" : "MISE_A_JOUR";
-  const estDoubleNumerique = typeSignature === "DOUBLE_NUMERIQUE";
-  const aDroitSigner = utilisateurConnecte.estHabilitePour({ tousLesDroits: [Droit.SIGNER_MENTION, Droit.METTRE_A_JOUR_ACTE] });
-  const verificationManquante = verificationObligatoire && !verificationDonneesEffectuee;
+  const [formulaireMentionEnCoursDeSaisie, setFormulaireMentionEnCoursDeSaisie] = useState<boolean>(false);
 
-  const construirePayload = (): Partial<IFicheActeDto> | null => {
-    if (!valeursVerification) return null;
+  const [afficherModaleAnalyseMarginale, setAfficherModaleAnalyseMarginale] = useState<boolean>(false);
+  const [donneesAnalyseMarginale, setDonneesAnalyseMarginale] = useState<IAnalyseMarginaleMiseAJour | null>(null);
+  const [mentionsDeLActe, setMentionsDeLActe] = useState<IMentionMiseAJour[]>([]);
+  const [mentionsDuTableau, setMentionsDuTableau] = useState<IMentionMiseAJour[]>([]);
+  const [mentionEnCoursDeSaisie, setMentionEnCoursDeSaisie] = useState<IMentionEnCours | null>(null);
+  const [motif, setMotif] = useState<string | null>(null);
+  const [verificationDonneesEffectuee, setVerificationDonneesEffectuee] = useState<boolean>(false);
 
-    switch (acte.nature) {
-      case "NAISSANCE":
-        return MiseAJourModificationForm.versDtoPatchNaissance(valeursVerification as IVerificationDonneesNaissanceForm, acte);
-      case "MARIAGE":
-      //return MiseAJourModificationForm.versDtoPatchMariage(valeursVerification as IVerificationDonneesMariageForm, acte);
-      case "DECES":
-      //return MiseAJourModificationForm.versDtoPatchDeces(valeursVerification as IVerificationDonneesDecesForm, acte);
-      default:
-        return null;
+  // Un seul état pour les valeurs de vérification (une seule nature active à la fois)
+  const [valeursVerification, setValeursVerification] = useState<TValeursVerification>(null);
+
+  const [acte, setActe] = useState<FicheActe | null>(null);
+  const { appelApi: getResumeActe } = useFetchApi(CONFIG_GET_RESUME_ACTE);
+  const { appelApi: getFormuleIntegrationRece } = useFetchApi(CONFIG_GET_FORMULE_INTEGRATION_RECE);
+  const [valeursInitialesFormulaireAnalyseMarginale, setValeursInitialesFormulaireAnalyseMarginale] =
+    useState<IAnalyseMarginaleMiseAJour | null>(null);
+  const { utilisateurConnecte } = useContext(RECEContextData);
+
+  const [formuleDIntegration, setFormuleDIntegration] = useState<IFormuleIntegrationDto | null>(null);
+
+  const acteEstEligibleFormuleDIntegrationEtUtilisateurALesDroits = useMemo(() => {
+    if (acte !== null) {
+      const aLesDroits = utilisateurConnecte.estHabilitePour({
+        tousLesDroits: [Droit.METTRE_A_JOUR_ACTE, Droit.MISE_A_JOUR_CREER_DOUBLE_NUMERIQUE]
+      });
+
+      return estActeEligibleDoubleNumerique(acte) && aLesDroits;
+    }
+    return false;
+  }, [acte, utilisateurConnecte]);
+
+  const verificationDonneesObligatoire = estMiseAJourAvecMentions && acteEstEligibleFormuleDIntegrationEtUtilisateurALesDroits;
+  const verificationDonneesDisponible = verificationDonneesObligatoire && miseAJourEffectuee;
+
+  const recupererMentions = (analyseMarginaleEstMiseAJour: boolean): IMentionMiseAJour[] => {
+    if (mentionEnCoursDeSaisie?.mention) {
+      if (
+        typeof mentionEnCoursDeSaisie.index === "number" &&
+        mentionsDeLActe[mentionEnCoursDeSaisie.index] !== mentionEnCoursDeSaisie.mention
+      ) {
+        return mentionsDeLActe.map((mention, index) => (index === mentionEnCoursDeSaisie.index ? mentionEnCoursDeSaisie.mention : mention));
+      } else {
+        return [...mentionsDeLActe, mentionEnCoursDeSaisie.mention];
+      }
+    } else if (analyseMarginaleEstMiseAJour) {
+      return mentionsDeLActe;
+    } else {
+      return mentionsDuTableau;
     }
   };
 
-  const gererClicTerminerEtSigner = () => {
-    if (estDoubleNumerique) {
-      const payload = construirePayload();
-      if (!payload) {
-        AfficherMessage.erreur("Données du formulaire manquantes", { fermetureAuto: true });
-        return;
-      }
+  const gererAffichageModaleAnalyseMarginale = (mentions: IMentionMiseAJour[]) => {
+    if (mentionEnCoursDeSaisie?.mention && mentionEnCoursDeSaisie.index === null) {
+      setAfficherModaleAnalyseMarginale(mentions[mentionEnCoursDeSaisie?.index ?? mentions.length - 1].affecteAnalyseMarginale);
+    }
+  };
 
-      setEnCoursEnvoi(true);
-      envoyerRectifications({
-        parametres: { body: payload },
-        apresSucces: () => {
-          setEnCoursEnvoi(false);
-          setModaleOuverte(true);
+  useEffect(() => {
+    if (acteEstEligibleFormuleDIntegrationEtUtilisateurALesDroits && formuleDIntegration === null) {
+      getFormuleIntegrationRece({
+        parametres: {},
+        apresSucces: formuleDIntegration => {
+          setFormuleDIntegration(formuleDIntegration);
         },
-        apresErreur: erreurs => {
-          setEnCoursEnvoi(false);
-          AfficherMessage.erreur("Erreur lors de l'envoi des rectifications", { erreurs, fermetureAuto: true });
+        apresErreur: erreurs =>
+          AfficherMessage.erreur("Une erreur est survenue lors de la récupération des informations de la formule d'intégration au RECE", {
+            erreurs
+          })
+      });
+    }
+  }, [acteEstEligibleFormuleDIntegrationEtUtilisateurALesDroits]);
+
+  useEffect(() => {
+    if (estMiseAJourAvecMentions) {
+      const analyseMarginaleEstMiseAJour = afficherAnalyseMarginale && donneesAnalyseMarginale !== null;
+      const mentions = recupererMentions(analyseMarginaleEstMiseAJour);
+
+      if (!mentions.length) return;
+
+      mettreAJourAnalyseMarginaleEtMentions({
+        parametres: {
+          body: MiseAJourForm.versDto(
+            idActe,
+            [
+              ...mentions,
+              ...(acteEstEligibleFormuleDIntegrationEtUtilisateurALesDroits && formuleDIntegration !== null
+                ? [
+                    {
+                      idTypeMention: formuleDIntegration.idTypeMention,
+                      affecteAnalyseMarginale: formuleDIntegration.affecteAnalyseMarginale,
+                      texte: formuleDIntegration.texteFormule
+                    }
+                  ]
+                : [])
+            ],
+            donneesAnalyseMarginale,
+            analyseMarginaleEstMiseAJour
+          )
+        },
+        apresSucces: () => {
+          setMentionsDeLActe(mentions);
+          activerMiseAJourActe();
+          resetModificationMention();
+          gererAffichageModaleAnalyseMarginale(mentions);
+        },
+        apresErreur: (erreurs: TErreurApi[]) => {
+          const messageErreur = (() => {
+            switch (true) {
+              case Boolean(erreurs?.find(erreur => erreur.code === "FCT_16136")):
+                return "Aucune modification de l'analyse marginale n'a été détectée";
+              case Boolean(erreurs?.find(erreur => erreur.code === "FCT_160168")):
+                return "La personne liée ne peut pas être le titulaire de l'acte";
+              default:
+                return "Impossible de mettre à jour l'acte";
+            }
+          })();
+
+          AfficherMessage.erreur(messageErreur, { erreurs, fermetureAuto: true });
         }
       });
-    } else {
-      setModaleOuverte(true);
     }
+
+    if (!estMiseAJourAvecMentions && donneesAnalyseMarginale !== null) {
+      mettreAJourAnalyseMarginale({
+        parametres: {
+          path: { idActe: idActe },
+          body: AnalyseMarginaleForm.versDto(donneesAnalyseMarginale)
+        },
+        apresSucces: () => {
+          activerOngletActeMisAJour();
+          setComposerActeMisAJour(true);
+          changerOnglet(ECleOngletsMiseAJour.ACTE_MIS_A_JOUR, null);
+          setVerificationDonneesEffectuee(!verificationDonneesObligatoire);
+        },
+        apresErreur: (erreurs: TErreurApi[]) => {
+          const messageErreur = erreurs.find(erreur => erreur.code === "FCT_16136")
+            ? "Aucune modification de l'analyse marginale n'a été détectée"
+            : "Impossible de mettre à jour l'analyse marginale";
+
+          AfficherMessage.erreur(messageErreur, { erreurs, fermetureAuto: true });
+        }
+      });
+    }
+  }, [donneesAnalyseMarginale, mentionEnCoursDeSaisie, mentionsDuTableau]);
+
+  useEffect(() => {
+    getResumeActe({
+      parametres: {
+        path: { idActe },
+        query: { remplaceIdentiteTitulaireParIdentiteTitulaireAM: true }
+      },
+      apresSucces: acteDto => {
+        setActe(FicheActe.depuisDto(acteDto));
+      },
+      apresErreur: erreurs =>
+        AfficherMessage.erreur("Une erreur est survenue lors de la récupération des informations de l'acte", { erreurs })
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!acte) return;
+
+    setValeursInitialesFormulaireAnalyseMarginale(
+      AnalyseMarginaleForm.genererValeursDefautFormulaire(acte.getTitulairesPourAnalyseMarginale(), motif)
+    );
+  }, [motif, acte]);
+
+  const resetModificationMention = () => {
+    setMentionEnCoursDeSaisie(mention => (mention ? null : mention));
+    setMentionsDuTableau(mentions => (mentions.length > 0 ? [] : mentions));
+    setFormulaireMentionEnCoursDeSaisie(false);
   };
 
-  if (!aDroitSigner) return null;
+  const activerMiseAJourActe = () => {
+    activerOngletActeMisAJour();
+    setComposerActeMisAJour(true);
+    changerOnglet(ECleOngletsMiseAJour.ACTE_MIS_A_JOUR, null);
+  };
+
+  const recupererFiliationsTitulaire = (filiations: Filiation[]) =>
+    filiations.map(filiation => ({
+      dateNaissance: filiation.naissance
+        ? DateRECE.depuisObjetDate({
+            annee: filiation.naissance.annee,
+            mois: filiation.naissance.mois,
+            jour: filiation.naissance.jour,
+            heure: filiation.naissance.heure,
+            minute: filiation.naissance.minute
+          }).format("JJ mois AAAA", "AVEC_PREFIXE")
+        : "",
+      prenoms: Object.fromEntries(filiation.prenoms.map((prenom, i) => [`prenom${i + 1}`, prenom])) ?? {},
+      nom: filiation.nom ?? "",
+      lieuFormate: filiation.naissance?.lieuFormate ?? "",
+      sexe: ESexe[filiation.sexe] ?? ""
+    }));
+
+  const titulairesMention: ITitulaireMention[] = useMemo(() => {
+    if (!acte) return [];
+
+    return [...Array(acte.getNombreTitulairesSelonNature()).keys()].map(index => {
+      return {
+        nom: acte?.titulaires?.[index].nom ?? "",
+        nomPartie1: acte?.titulaires?.[index].nomPartie1 ?? "",
+        nomPartie2: acte?.titulaires?.[index].nomPartie2 ?? "",
+        nomSecable: Boolean(acte?.titulaires?.[index].nomPartie1 && acte?.titulaires?.[index].nomPartie2),
+        prenoms: Object.fromEntries(acte?.titulaires?.[index].prenoms.map((prenom, i) => [`prenom${i + 1}`, prenom])) ?? {},
+        sexe: ESexe[acte?.titulaires?.[index].sexe] ?? "",
+        dateNaissance: acte?.titulaires?.[index].getDateNaissance("JJ mois AAAA", "AVEC_PREFIXE") ?? "",
+        lieuFormate: acte?.titulaires?.[index].naissance?.lieuFormate ?? "",
+        filiations: acte?.titulaires?.[index].filiations ? recupererFiliationsTitulaire(acte?.titulaires?.[index].filiations) : []
+      };
+    });
+  }, [acte]);
 
   return (
     <>
-      <Bouton
-        type="button"
-        title={verificationManquante ? "Vous devez vérifier les données avant de signer" : "Terminer et signer"}
-        disabled={saisieMentionEnCours || !miseAJourEffectuee || verificationManquante || enCoursEnvoi || enAttenteEnvoiRectifications}
-        onClick={gererClicTerminerEtSigner}
-      >
-        {"Terminer et signer"}
-      </Bouton>
-      {modaleOuverte && (
+      {(enAttenteMiseAJourAnalyseMarginale || enAttenteMiseAJourAnalyseMarginaleEtMention) && <PageChargeur />}
+      <div className="w-1/2">
+        <OngletsBouton<ECleOngletsMiseAJour>
+          onglets={[
+            ...(estMiseAJourAvecMentions ? [{ cle: ECleOngletsMiseAJour.MENTIONS, libelle: "Mentions" }] : []),
+            ...(afficherAnalyseMarginale ? [{ cle: ECleOngletsMiseAJour.ANALYSE_MARGINALE, libelle: "Analyse Marginale" }] : []),
+            ...(verificationDonneesDisponible
+              ? [{ cle: ECleOngletsMiseAJour.VERIFICATION_DONNEES, libelle: "Vérification des données" }]
+              : [])
+          ]}
+          cleOngletActif={ongletsActifs.formulaires}
+          changerOnglet={valeur => changerOnglet(null, valeur)}
+        />
+
+        <div className="mt-4 flex h-[calc(100vh-16rem)] flex-col overflow-y-auto">
+          {estMiseAJourAvecMentions && (
+            <OngletsContenu estActif={ongletsActifs.formulaires === ECleOngletsMiseAJour.MENTIONS}>
+              {acteEstEligibleFormuleDIntegrationEtUtilisateurALesDroits && (
+                <div className="pb-4 text-left">
+                  <ConteneurAvecBordure titreEnTete="Formule intégration dans RECE">
+                    <div className="mt-3 bg-slate-100">{formuleDIntegration?.texteFormule}</div>
+                  </ConteneurAvecBordure>
+                </div>
+              )}
+
+              <Formik<IMiseAJourMentionsForm>
+                initialValues={{ mentions: [] }}
+                onSubmit={values => {
+                  setMentionsDuTableau(values.mentions);
+                }}
+              >
+                <Form>
+                  <TableauMentions
+                    setAfficherOngletAnalyseMarginale={setAfficherAnalyseMarginale}
+                    setMotif={setMotif}
+                    setMentionsDuTableau={setMentionsDuTableau}
+                    formulaireMentionEnCoursDeSaisie={formulaireMentionEnCoursDeSaisie}
+                    donneesMentions={mentionsDeLActe}
+                    donneesAnalyseMarginale={donneesAnalyseMarginale}
+                  />
+                </Form>
+              </Formik>
+              <MentionForm
+                titulaires={titulairesMention}
+                setEnCoursDeSaisie={setFormulaireMentionEnCoursDeSaisie}
+                enCoursDeSaisie={formulaireMentionEnCoursDeSaisie}
+                setMentionEnCoursDeSaisie={setMentionEnCoursDeSaisie}
+                natureActe={acte?.nature}
+              />
+            </OngletsContenu>
+          )}
+
+          {afficherAnalyseMarginale && (
+            <OngletsContenu estActif={ongletsActifs.formulaires === ECleOngletsMiseAJour.ANALYSE_MARGINALE}>
+              <AnalyseMarginaleFormulaire
+                setDonneesAnalyseMarginale={setDonneesAnalyseMarginale}
+                valeursInitiales={valeursInitialesFormulaireAnalyseMarginale}
+                motif={motif}
+              />
+            </OngletsContenu>
+          )}
+
+          {verificationDonneesObligatoire && acte && (
+            <OngletsContenu estActif={ongletsActifs.formulaires === ECleOngletsMiseAJour.VERIFICATION_DONNEES}>
+              {acte.nature === "NAISSANCE" && (
+                <VerificationDonneesNaissance
+                  acte={acte}
+                  miseAJourEffectuee={miseAJourEffectuee}
+                  verificationDonneesEffectuee={verificationDonneesEffectuee}
+                  setVerificationDonneesEffectuee={setVerificationDonneesEffectuee}
+                  onValeursChange={setValeursVerification}
+                />
+              )}
+              {acte.nature === "MARIAGE" && (
+                <VerificationDonneesMariage
+                  acte={acte}
+                  miseAJourEffectuee={miseAJourEffectuee}
+                  verificationDonneesEffectuee={verificationDonneesEffectuee}
+                  setVerificationDonneesEffectuee={setVerificationDonneesEffectuee}
+                  onValeursChange={setValeursVerification}
+                />
+              )}
+              {acte.nature === "DECES" && (
+                <VerificationDonneesDeces
+                  acte={acte}
+                  miseAJourEffectuee={miseAJourEffectuee}
+                  verificationDonneesEffectuee={verificationDonneesEffectuee}
+                  setVerificationDonneesEffectuee={setVerificationDonneesEffectuee}
+                  onValeursChange={setValeursVerification}
+                />
+              )}
+
+              <ConteneurBoutonBasDePage position="droite">
+                <BoutonTerminerEtSigner
+                  saisieMentionEnCours={formulaireMentionEnCoursDeSaisie}
+                  acte={acte}
+                  verificationDonneesEffectuee={verificationDonneesEffectuee}
+                  verificationObligatoire={verificationDonneesObligatoire}
+                  valeursVerification={valeursVerification}
+                />
+              </ConteneurBoutonBasDePage>
+            </OngletsContenu>
+          )}
+
+          {ongletsActifs.formulaires !== ECleOngletsMiseAJour.VERIFICATION_DONNEES && (
+            <ConteneurBoutonBasDePage position="droite">
+              {verificationDonneesDisponible && (
+                <Bouton
+                  type="button"
+                  title="Vérifier les données"
+                  onClick={() => changerOnglet(null, ECleOngletsMiseAJour.VERIFICATION_DONNEES)}
+                >
+                  {"Vérifier les données"}
+                </Bouton>
+              )}
+              {!estMiseAJourAvecMentions && <BoutonValiderEtTerminer disabled={!miseAJourEffectuee} />}
+            </ConteneurBoutonBasDePage>
+          )}
+        </div>
+      </div>
+      {afficherModaleAnalyseMarginale && (
         <ConteneurModale>
-          <div className="border-3 w-[34rem] max-w-full rounded-xl border-solid border-bleu-sombre bg-blanc p-5">
-            <h2 className="m-0 mb-4 text-center font-medium text-bleu-sombre">Signature des mentions</h2>
-            <SignatureDocument
-              typeSignature={typeSignature}
-              idActe={idActe}
-              idRequete={idRequete}
-              apresSignature={succes => {
-                setModaleOuverte(false);
-                if (succes) {
-                  changerOnglet(ECleOngletsMiseAJour.ACTE, null);
-                  setEstActeSigne(true);
-                  AfficherMessage.succes("L'acte a été mis à jour avec succès.", { fermetureAuto: true });
-                  desactiverBlocker();
-                }
+          <div className="rounded-md border-[2px] border-solid border-bleu-sombre bg-blanc p-6 shadow-lg">
+            <div className="p-6">{"Veuillez vérifier s'il y a lieu de mettre à jour l'analyse marginale"}</div>
+            <Bouton
+              title="J'ai lu ce message"
+              onClick={() => {
+                setAfficherModaleAnalyseMarginale(false);
               }}
-            />
+            >
+              {"OK"}
+            </Bouton>
           </div>
         </ConteneurModale>
       )}
@@ -131,4 +443,4 @@ const BoutonTerminerEtSigner: React.FC<IBoutonTerminerEtSignerProps> = ({
   );
 };
 
-export default BoutonTerminerEtSigner;
+export default PartieFormulaire;
